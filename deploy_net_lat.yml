@@ -1,0 +1,31 @@
+#To auto-scale the deployment based on network latency instead of CPU, you need to use a different metric provider. In Kubernetes, you can use custom metrics providers like Prometheus or CloudWatch to provide the desired metric. Once you have a custom metrics provider, you can use the Kubernetes Metrics API to retrieve the metrics and use them for scaling.
+
+#Here you can configure an autoscaler based on network latency using Prometheus:
+
+#Prometheus helps scrape the network latency metrics 
+
+#Create a new HorizontalPodAutoscaler (HPA) object that uses the Prometheus metrics provider:
+
+
+apiVersion: autoscaling/v2beta1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: app # we can name it the userapp or shiftsapp 
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: app #here we input the target which is either userapp or shiftsapp
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Pods
+    pods:
+      metricName: network_latency
+      targetAverageValue: 0.5
+
+
+
+
+#The metricName field specifies the name of the metric you want to use for scaling, and the targetAverageValue field specifies the target value for the metric. In this case, we're using a network latency metric and setting the target value to 0.5.
+
