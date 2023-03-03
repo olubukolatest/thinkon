@@ -1,0 +1,228 @@
+# This would create the namespace for deploying to staging  Production 
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+
+---
+
+#the use of configMaps to pass our username and secret to pass our password which has been encrpted using base64
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongo-configmap
+  namespace: production
+data:
+  db-username: uatdb
+  db-hostname: mongodb
+  db-password: ''
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-password
+  namespace: production
+type: Opaque
+data:
+  db-password: dWF0ZGJAMTIz
+
+---
+
+#Using rolling update as my deployment  strategy so my cluster can handle rollbacks.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: userapp
+  namespace: production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: userapp
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 1
+  template:
+    metadata:
+      name: springapppod
+      labels:
+        app: userapp
+    spec:
+      containers:
+      - name: springappcontainer
+        image: olubukola
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MONGO_DB_USERNAME
+          valueFrom:
+            configMapKeyRef:
+              name: mongo-configmap
+              key: db-username
+        - name: MONGO_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-password
+              key: db-password
+        - name: MONGO_DB_HOSTNAME
+          valueFrom:
+            configMapKeyRef:
+              name: mongo-configmap
+              key: db-hostname
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      autoscaling:
+        horizontalPodAutoscaler:
+          scaleTargetRef:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: app
+          minReplicas: 2
+          maxReplicas: 10
+          targetCPUUtilizationPercentage: 70
+      # the autoscaling is based on CPU utilization
+      # This will create a horizontal pod autoscaler object that will adjust the number of replicas based on CPU utilization
+      # This will add the autoscaler to the existing deployment
+      # If the average CPU utilization across all pods in the deployment reaches 70%, the autoscaler will increase the number of replicas up to a maximum of 10
+      # If the CPU utilization drops below 70%, the autoscaler will decrease the number of replicas back down to the minimum of 2
+      # The autoscaler will also take into account any requests or limits specified in the container resources section above
+      metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 70
+
+---
+
+# i am using load balancer service to expose my cluster to the internet.
+apiVersion: v1
+kind: Service
+metadata:
+  name: userapp
+  namespace: production
+spec:
+  selector:
+    app: userapp
+  ports:
+  - port: 80
+    targetPort: 8080
+    nodePort: 30030
+  type: LoadBalancer
+
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodbpvc
+  namespace: production
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 16Gi
+
+---
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db
+  namespace: production
+spec:
+  serviceName: "mongo"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+     metadata:
+       name: mongodbpod
+       labels:
+         app: mongodb
+     spec:
+       volumes:
+       - name: pvc
+         persistentVolumeClaim:
+           claimName: mongodbpvc
+       containers:
+       - name: mongodbcontainer
+         image: mongo
+         ports:
+         - containerPort: 27017
+         env:
+         - name: MONGO_INITDB_ROOT_USERNAME
+           valueFrom:
+             configMapKeyRef:
+               name: mongo-configmap
+               key: db-username
+         - name: MONGO_INITDB_ROOT_PASSWORD
+           valueFrom:
+             secretKeyRef:
+               name: mongodb-password
+               key: db-password
+         volumeMounts:
+         - name: pvc
+           mountPath: /data/db
+         resources:
+           requests:
+             cpu: 100m
+             memory: 256Mi
+---   
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  namespace: production
+spec:
+  type: ClusterIP
+  selector:
+    app: mongodb
+  ports:
+  - port: 27017
+    targetPort: 27017
+---
+
+# created a role and rolebinding so as to add limit to the functionality of the development team
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployment
+  namespace: production
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["create", "update", "delete", "get", "list", "watch", "rollback"]
+- apiGroups: [""]
+  resources: ["pods", "services"]
+  verbs: ["get", "list", "watch"]
+  
+---
+
+#team members name can be added here
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deployment-binding
+  namespace: production
+subjects:
+- kind: User
+  name: <insert-developer-username-here>
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: deployment
+  apiGroup: rbac.authorization.k8s.io
